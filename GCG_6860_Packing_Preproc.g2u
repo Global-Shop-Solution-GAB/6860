@@ -1,0 +1,264 @@
+﻿Program.Sub.Preflight.Start
+V.Global.bConOpen.Declare(Boolean, False)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Written By: Brandon Medina 
+'Customer: Tintoria Piana
+'Quote: 13686
+'Desc: Script is new preprocessor for report ID 107, Packing list with Lot/Bin. Script joins tables and has custom BI table for the crystal report to greatly improve performance time
+F.Intrinsic.Control.SetErrorHandler("Sub_Err")
+F.Intrinsic.Control.ClearErrors
+V.Local.sPackingNo.Declare
+
+F.Intrinsic.Control.SelectCase(V.Caller.Hook)
+	'BI Pre-Process Hook
+	F.Intrinsic.Control.Case("16090")
+		'Packing List Print from Staging Orders Menu Item
+		F.Intrinsic.Control.If(V.Passed.CALLING-PGM, =, "ORD0LZBI", AND, V.Passed.BIP_REPORTID, =, "000107")
+			F.Intrinsic.Control.CallSub(TableCheck)
+			F.Intrinsic.Control.CallSub(BuildOrders)
+		F.Intrinsic.Control.EndIf
+'	F.Intrinsic.Control.Case("38411")
+'		'Set Packing list number to global variable to be read from when report prints 
+'		'000006 > PCK-NO 53 pad out to 7 chars w/ 0s 
+'		'GLOBAL
+'		F.Intrinsic.String.LPad(V.Passed.000006, "0", 7, V.Local.sPackingNo)
+'		V.Passed.GLOBAL.Set(V.Local.sPackingNo)
+'		
+F.Intrinsic.Control.EndSelect
+
+
+F.Intrinsic.Control.Label("Sub_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	F.Intrinsic.Control.CallSub(ErrorMsg)
+Function.Intrinsic.Control.EndIf
+Program.Sub.Main.End
+
+Program.Sub.ErrorMsg.Start
+V.Local.sError.Declare(String)
+
+'F.Intrinsic.Control.If(V.Global.bConOpen)
+'	F.ODBC.Connection!con.Close
+'F.Intrinsic.Control.EndIf
+
+Function.Intrinsic.String.Concat("Project: GCG_6860_Packing_Preproc",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+F.Intrinsic.UI.Msgbox(V.Local.sError)
+Program.Sub.ErrorMsg.End
+
+Program.Sub.TableCheck.Start
+F.Intrinsic.Control.SetErrorHandler("Sub_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.bTableExists.Declare(Boolean, False)
+V.Local.sSQL.Declare
+
+F.ODBC.Connection!con.OpenCompanyConnection
+V.Global.bConOpen.Set(True)
+F.ODBC.Connection!con.TableExists("GCG_6860_PACKLIST", V.Local.bTableExists)
+
+
+F.Intrinsic.Control.If(V.Local.bTableExists.Not)
+	'Custom table just mimics the schema of BI_LOTBIN_DTL and a couple extra fields that will be added via GAB in BuildOrders subroutine. JOB was increased to be size 15, as it can sometimes populate from ITEM_MASTER.USER_FIELD_1, which might contain legacy WO numbers from their old system, which is not 6 digits. This will just mean it'll display on the report, but not be tied to anything in global shop within the report. 
+	F.ODBC.Connection!con.Execute("create table GCG_6860_PACKLIST (TERMINAL CHAR(3), RPTID CHAR(6), ORDER_NO CHAR(7), RECORD_NO CHAR(4), PART CHAR(20), LINE_TYPE CHAR(1), REC_TYPE CHAR(2), LOT CHAR(15), BIN CHAR(6), HEAT CHAR(15), LBHS_QTY_0 NUMERIC(9,0), LBHS_QTY_2 NUMERIC(11,2), LBHS_QTY_4 NUMERIC(13,4), WEIGHT_KG NUMERIC(13, 1), JOB CHAR(15), SUFFIX CHAR(3))")
+'Clear out previous runs based on terminal (to account for multiple users)
+F.Intrinsic.Control.Else
+	F.Intrinsic.String.Build("delete from GCG_6860_PACKLIST where TERMINAL = '{0}'", V.Passed.BIP_Terminal.Trim, V.Local.sSQL)
+	F.ODBC.Connection!con.Execute(V.Local.sSQL)
+F.Intrinsic.Control.EndIf
+
+F.ODBC.Connection!con.Close
+V.Global.bConOpen.Set(False)
+
+
+F.Intrinsic.Control.Label("Sub_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	F.Intrinsic.Control.CallSub(ErrorMsg)
+Function.Intrinsic.Control.EndIf
+Program.Sub.TableCheck.End
+
+Program.Sub.BuildOrders.Start
+F.Intrinsic.Control.SetErrorHandler("Sub_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sPackingList.Declare
+V.Local.sTerminal.Declare
+V.Local.sSQL.Declare
+V.Local.sLots.Declare
+V.Local.sLot.Declare
+V.Local.sWO.Declare
+V.Local.sSuffix.Declare
+V.Local.sHold.Declare
+V.Local.iRecord.Declare
+V.Local.iLotIndex.Declare
+V.Local.iItemIndex.Declare
+V.Local.sFilter.Declare
+V.Local.fWeightKg.Declare
+V.Local.sKG.Declare
+V.Local.sOrdinals.Declare
+V.Local.i.Declare
+V.Local.sDatePrint.Declare
+V.Local.sParam.Declare
+V.Local.sParamVal.Declare
+V.Local.iRet.Declare
+V.Local.iRunID.Declare
+V.Local.iReportID.Declare
+V.Local.iLogID.Declare
+V.Local.sPart.Declare
+V.Local.sLB.Declare
+V.Local.sItemMasterSQL.Declare
+V.Local.sMissingPart.Declare
+
+'V.Local.sPackingList.Set(V.Passed.BIP_PCKNO.Trim)
+'Use Global variable that should contain packing number from the populate hook. This passed variable here is blank. 
+V.Local.sPackingList.Set(V.Passed.GLOBAL.Trim)
+V.Local.sTerminal.Set(V.Passed.BIP_Terminal.Trim)
+
+F.ODBC.Connection!con.OpenCompanyConnection
+V.Global.bConOpen.Set(True)
+
+'use the show sql statement feature from the original report as a basis to only pull in relevant data, where BI_LOTBIN_DTL is the main data source in the SUB sub report. Key difference is we will not join V_ITEM_HISTORY as that table is large. Instead that will be filled manually with gab. Also will not utilize ITEM_HIST_USR. Added fields from Item_History include Part, JOB (WO_NUM), & SUFFIX (WO_SUFF). Weight_KG added so the report will read directly from that value rather than calculating it itself 
+F.Intrinsic.String.Build("select distinct A.TERMINAL, A. RPTID, A.ORDER_NO, A.RECORD_NO, A.LINE_TYPE, ltrim(rtrim(A.LOT)) as LOT, A.LBHS_QTY_0, A.LBHS_QTY_2, A.LBHS_QTY_4, A.REC_TYPE, A.HEAT, ltrim(rtrim(A.BIN)) as BIN from V_BI_LOTBIN_DTL A where A.TERMINAL = '{0}' and A.RPTID = '000107'", V.Local.sTerminal, V.Local.sSQL)
+F.Data.DataTable.CreateFromSQL("dtRecToWrite", "con", V.Local.sSQL, True)
+F.Data.DataTable.AddColumn("dtRecToWrite", "WO_NUM", "String")
+F.Data.DataTable.AddColumn("dtRecToWrite", "WO_SUFF", "String")
+F.Data.DataTable.AddColumn("dtRecToWrite", "WEIGHT_KG", "String")
+F.Data.DataTable.AddColumn("dtRecToWrite", "PART", "String")
+
+'Convert weight (lbs) of the lot to Kg. Stored in the item master's heat field. 
+'Loop and convert 1 by 1. Expression column causes program to crash 
+'Round to 1 siginificant digit per customer request
+F.Intrinsic.Control.For(V.Local.iRecord, 0, V.DataTable.dtRecToWrite.RowCount--,1)
+	F.Intrinsic.Math.Mult(V.DataTable.dtRecToWrite(V.Local.iRecord).HEAT!FieldValTrim, "0.453592", V.Local.sKG)
+	F.Intrinsic.String.Format(V.Local.sKG, "0.0", V.Local.sKG)
+	F.Data.DataTable.SetValue("dtRecToWrite", V.Local.iRecord, "WEIGHT_KG", V.Local.sKG)
+	
+	F.Intrinsic.String.Format(V.DataTable.dtRecToWrite(V.Local.iRecord).HEAT!FieldValTrim, "0.0", V.Local.sLB)
+	F.Intrinsic.Control.If(V.Local.sLB, <>, "0.0")
+		F.Data.DataTable.SetValue("dtRecToWrite", V.Local.iRecord, "HEAT", V.Local.sLB)
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Next(V.Local.iRecord)
+
+
+'Grab all Lots in the sales order being staged 
+F.Data.DataTable.ColumnToString("dtRecToWrite", "LOT", V.Local.sLots)
+F.Intrinsic.String.Split(V.Local.sLots, "*!*", V.Local.sLots)
+'Function.Intrinsic.Debug.Stop
+F.Intrinsic.String.RemoveArrayDuplicates(V.Local.sLots, V.Local.sLots)
+F.Intrinsic.Variable.RemoveArrayElementByValue(V.Local.sLots, "", V.Local.sLots)
+
+
+'Determine WOs from either the item master or item history 
+	'Create Item Master table to read WO from the USER_FIELD_1 field 
+F.Intrinsic.Control.For(V.Local.iLotIndex, 0, V.Local.sLots.UBound, 1)
+	V.Local.sLot.Set(V.Local.sLots(V.Local.iLotIndex))
+	F.Intrinsic.Control.If(V.Local.iLotIndex, =, 0)
+		F.Intrinsic.String.Build("select PART, LOCATION, LOT, BIN, HEAT, USER_FIELD_1 from V_ITEM_MASTER where LOT in ('{0}'", V.Local.sLot.Trim, V.Local.sSQL)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.String.Concat(V.Local.sSQL, ", '", V.Local.sLot.Trim, "'", V.Local.sSQL)
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Next(V.Local.iLotIndex)
+'Function.Intrinsic.Debug.InvokeDebugger
+'Function.Intrinsic.Debug.Stop
+
+	'Remove 0 qty records, as those were added at go live. User field 1 field contains the WO if at all. Otherwise continue with logic for item history table
+F.Intrinsic.String.Concat(V.Local.sSQL, ") and QUANTITY <> '0.000000' and USER_FIELD_1 <> ''", V.Local.sSQL)
+V.Local.sItemMasterSQL.Set(V.Local.sSQL)
+F.Data.DataTable.CreateFromSQL("dtItemMaster", "con", V.Local.sSQL, True)
+
+	'Create Item History Table to read WO from if needed. (If USER_FIELD_1 field was empty). Statement filters item history for J52 and O35 transaction codes while also grabbing job and suffix fields 
+	'Recycle sql statement from before to grab lots 
+F.Intrinsic.String.Replace(V.Local.sSQL, " and QUANTITY <> '0.000000' and USER_FIELD_1 <> ''", "", V.Local.sSQL)
+F.Intrinsic.String.Replace(V.Local.sSQL, "USER_FIELD_1 from V_ITEM_MASTER", "JOB, SUFFIX from V_ITEM_HISTORY", V.Local.sSQL)
+F.Intrinsic.String.Concat(V.Local.sSQL, " and (CODE_TRANSACTION = 'J52' or CODE_TRANSACTION = 'O35')", V.Local.sSQL)
+F.Data.DataTable.CreateFromSQL("dtItemHistory", "con", V.Local.sSQL, True)
+
+'Loop through main datatable and find the WO for each lot by first looking at item master table, and if not there, then item history 
+F.Intrinsic.Control.For(V.Local.iRecord, 0, V.DataTable.dtRecToWrite.RowCount--, 1)
+	V.Local.sLot.Set(V.DataTable.dtRecToWrite(V.Local.iRecord).LOT!FieldValTrim)
+	
+	F.Intrinsic.Control.If(V.Local.sLot, <>, "")
+		V.Local.sOrdinals.Redim(0,0)
+		F.Intrinsic.String.Build("LOT = '{0}'", V.Local.sLot, V.Local.sFilter)
+		'Checking item master first
+		F.Data.DataTable.Select("dtItemMaster", V.Local.sFilter, V.Local.sOrdinals)
+		
+		F.Intrinsic.Control.If(V.Local.sOrdinals, <>, "***NORETURN***")
+			F.Intrinsic.String.Split(V.Local.sOrdinals, "*!*", V.Local.sOrdinals)
+			'Only look at ordinal of top record returned from item master table
+			V.Local.sWO.Set(V.DataTable.dtItemMaster(V.Local.sOrdinals(0)).USER_FIELD_1!FieldValTrim)
+			V.Local.sSuffix.Set("")
+			V.Local.sPart.Set(V.DataTable.dtItemMaster(V.Local.sOrdinals(0)).PART!FieldValTrim)
+			
+			F.Data.DataTable.SetValue("dtRecToWrite", V.Local.iRecord, "WO_NUM", V.Local.sWO, "WO_SUFF", V.Local.sSuffix, "PART", V.Local.sPart)
+		'Check item history next
+		F.Intrinsic.Control.Else
+			V.Local.sOrdinals.Redim(0,0)
+			F.Data.DataTable.Select("dtItemHistory", V.Local.sFilter, V.Local.sOrdinals)
+			
+			F.Intrinsic.Control.If(V.Local.sOrdinals, <>, "***NORETURN***")
+				F.Intrinsic.String.Split(V.Local.sOrdinals, "*!*", V.Local.sOrdinals)
+				'Only look at ordinal of top record returned from item master table
+				V.Local.sWO.Set(V.DataTable.dtItemHistory(V.Local.sOrdinals(0)).JOB!FieldValTrim)
+				V.Local.sSuffix.Set(V.DataTable.dtItemHistory(V.Local.sOrdinals(0)).SUFFIX!FieldValTrim)
+				V.Local.sPart.Set(V.DataTable.dtItemHistory(V.Local.sOrdinals(0)).PART!FieldValTrim)
+				
+				F.Data.DataTable.SetValue("dtRecToWrite", V.Local.iRecord, "WO_NUM", V.Local.sWO, "WO_SUFF", V.Local.sSuffix, "PART", V.Local.sPart)
+			F.Intrinsic.Control.Else
+				'No match found in either
+				V.Local.sWO.Set("")
+				V.Local.sSuffix.Set("")
+				V.Local.sPart.Set("")
+				
+				'***Filling from dictionary isn't possible for dataviews (in GAB help but it errors)
+				F.Intrinsic.String.Build("select distinct PART from V_ITEM_MASTER where LOT = '{0}' and BIN = '{1}'", V.Local.sLot, V.DataTable.dtRecToWrite(V.Local.iRecord).BIN!FieldValTrim, V.Local.sItemMasterSQL)
+				F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sItemMasterSQL, V.Local.sMissingPart)
+				F.Intrinsic.Control.If(V.Local.sMissingPart, <>, "***NORETURN***")
+					F.Data.DataTable.SetValue("dtRecToWrite", V.Local.iRecord, "WO_NUM", V.Local.sWO, "WO_SUFF", V.Local.sSuffix, "PART", V.Local.sMissingPart)
+				F.Intrinsic.Control.Else
+					F.Data.DataTable.SetValue("dtRecToWrite", V.Local.iRecord, "WO_NUM", V.Local.sWO, "WO_SUFF", V.Local.sSuffix, "PART", V.Local.sPart)
+				F.Intrinsic.Control.EndIf
+				
+				'F.Intrinsic.Control.GoTo("NEXT")
+			F.Intrinsic.Control.EndIf
+		F.Intrinsic.Control.EndIf
+		
+	F.Intrinsic.Control.Else
+		F.Intrinsic.Control.GoTo("NEXT")
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.Label("NEXT")
+F.Intrinsic.Control.Next(V.Local.iRecord)
+
+'***At this point, anything that is line_type P and doesn't have a WO filled, and therefore no Part, look at Item master again, but allow 0 qty and blank user field 1 values to come in, and fill based on LOT and BIN fields. Done above in the loop 
+'F.Data.DataTable.AddExpressionColumn("dtRecToWrite", "LOT_MATCH", "String", "trim([LOT]) + trim([BIN])")
+'F.Data.DataView.Create("dtRecToWrite", "dvRecsLeft", 22, "PART = '' and LINE_TYPE = 'P'","")
+
+'F.Intrinsic.String.Replace(V.Local.sItemMasterSQL, " and QUANTITY <> '0.000000' and USER_FIELD_1 <> ''", "", V.Local.sItemMasterSQL)
+'F.Intrinsic.String.Replace(V.Local.sItemMasterSQL, "PART, LOCATION, LOT, BIN, HEAT, USER_FIELD_1", "distinct ltrim(rtrim(LOT)) + ltrim(rtrim(BIN)) as MATCH, PART", V.Local.sItemMasterSQL)
+'F.Data.Dictionary.CreateFromSQL("dictItemMastAgain", "con", V.Local.sItemMasterSQL)
+'F.Data.Dictionary.SetDefaultReturn("dictItemMastAgain", "")
+
+'F.Data.DataView.FillFromDictionary("dtRecToWrite", "dvRecsLeft", "dictItemMastAgain", "LOT_MATCH", "PART")
+'F.Data.DataView.Close("dtRecToWrite", "dvRecsLeft")
+'F.Data.Dictionary.Close("dictItemMastAgain")
+
+
+'Adding of the totals of all lots (linear yards and eaches) is done in crystal report 
+
+
+F.Data.DataTable.SaveToDB("dtRecToWrite", "con", "GCG_6860_PACKLIST", "TERMINAL*!*RPTID*!*ORDER_NO*!*SEQUENCE", 128, "TERMINAL@!@TERMINAL*!*RPTID@!@RPTID*!*ORDER_NO@!@ORDER_NO*!*RECORD_NO@!@RECORD_NO*!*LINE_TYPE@!@LINE_TYPE*!*REC_TYPE@!@REC_TYPE*!*LOT@!@LOT*!*BIN@!@BIN*!*HEAT@!@HEAT*!*LBHS_QTY_0@!@LBHS_QTY_0*!*LBHS_QTY_2@!@LBHS_QTY_2*!*LBHS_QTY_4@!@LBHS_QTY_4*!*WO_NUM@!@JOB*!*WO_SUFF@!@SUFFIX*!*WEIGHT_KG@!@WEIGHT_KG*!*PART@!@PART")
+
+F.ODBC.Connection!con.Close
+V.Global.bConOpen.Set(False)
+
+F.Intrinsic.Control.Label("Sub_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	F.Intrinsic.Control.CallSub(ErrorMsg)
+F.Intrinsic.Control.EndIf
+Program.Sub.BuildOrders.End
+
+Program.Sub.Comments.Start
+${$5$}$20.1.8286.22461$}$1
+${$6$}$bmedina$}$20230217123148129$}$kOipCrsyLBVj2KoSwkcdK23ChxGVcBlEJWW94WSAxFgEaHT2Yp5RXBOhibdOMOeAz5yYXSttzfI=
+Program.Sub.Comments.End
